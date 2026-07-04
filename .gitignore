@@ -1,0 +1,21 @@
+# Maven build output
+/target/
+
+# Eclipse / IntelliJ / VS Code
+*.iml
+*.ipr
+*.iws
+.idea/
+.vscode/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# H2 database files
+/data/
