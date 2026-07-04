@@ -6,6 +6,7 @@ import com.bank.model.Transaction;
 import com.bank.model.User;
 import com.bank.repository.AuditLogRepository;
 import com.bank.service.AccountService;
+import com.bank.service.ApiService;
 import com.bank.service.AuthService;
 import com.bank.service.OtpService;
 import com.bank.service.TransactionService;
@@ -14,6 +15,7 @@ import com.bank.util.InputValidator;
 import com.bank.util.SessionManager;
 
 import javafx.application.Application;
+import javafx.application.Platform;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
@@ -43,10 +45,12 @@ public class App extends Application {
     private final AccountService accountService = new AccountService();
     private final TransactionService transactionService = new TransactionService();
     private final OtpService otpService = new OtpService();
+    private final ApiService apiService = new ApiService();
     private final AuditLogRepository auditRepo = new AuditLogRepository();
 
     // Testing Banner Label for easy OTP viewing
     private static Label otpBannerLabel;
+    private Label apiStatusLabel;
 
     public static void launchApp(String[] args) {
         launch(args);
@@ -56,8 +60,8 @@ public class App extends Application {
     public void start(Stage stage) {
         this.primaryStage = stage;
         stage.setTitle("TECHN GLOBAL BANK - Enterprise Banking Application");
-        stage.setMinWidth(960);
-        stage.setMinHeight(640);
+        stage.setMinWidth(760);
+        stage.setMinHeight(540);
 
         // Setup initial view
         showLogin();
@@ -70,6 +74,73 @@ public class App extends Application {
         } catch (Exception e) {
             System.err.println("Could not load styles.css: " + e.getMessage());
         }
+    }
+
+    private void applyResponsiveSidebar(Scene scene, BorderPane layout, VBox sidebar) {
+        Runnable updateLayout = () -> {
+            if (scene.getWidth() < 900) {
+                if (layout.getLeft() != null) {
+                    layout.setLeft(null);
+                    layout.setTop(sidebar);
+                    sidebar.setPrefWidth(Double.MAX_VALUE);
+                }
+            } else {
+                if (layout.getTop() != null) {
+                    layout.setTop(null);
+                    layout.setLeft(sidebar);
+                    sidebar.setPrefWidth(220);
+                }
+            }
+        };
+        scene.widthProperty().addListener((obs, oldValue, newValue) -> updateLayout.run());
+        updateLayout.run();
+    }
+
+    private FlowPane createResponsiveFlowPane(double hgap, double vgap) {
+        FlowPane flow = new FlowPane(hgap, vgap);
+        flow.setPrefWrapLength(900);
+        flow.setMaxWidth(Double.MAX_VALUE);
+        flow.setAlignment(Pos.TOP_LEFT);
+        return flow;
+    }
+
+    private HBox createApiStatusBanner() {
+        HBox banner = new HBox();
+        banner.setAlignment(Pos.CENTER_LEFT);
+        banner.setPadding(new Insets(10, 0, 10, 0));
+        banner.getStyleClass().add("api-status-banner");
+
+        apiStatusLabel = new Label();
+        apiStatusLabel.getStyleClass().add("api-status-text");
+        banner.getChildren().add(apiStatusLabel);
+        updateApiStatusBanner();
+        return banner;
+    }
+
+    private void updateApiStatusBanner() {
+        if (apiStatusLabel == null) {
+            return;
+        }
+        if (!apiService.isRemoteEnabled()) {
+            apiStatusLabel
+                    .setText("Remote API disabled. Set BANK_API_BASE_URL or bank.api.base.url to enable integration.");
+            apiStatusLabel.getStyleClass().removeAll("api-status-live", "api-status-warning", "api-status-error");
+            apiStatusLabel.getStyleClass().add("api-status-warning");
+            return;
+        }
+
+        apiStatusLabel.setText("Remote API: checking connectivity...");
+        apiStatusLabel.getStyleClass().removeAll("api-status-live", "api-status-warning", "api-status-error");
+        apiStatusLabel.getStyleClass().add("api-status-warning");
+
+        new Thread(() -> {
+            boolean reachable = apiService.isApiReachable();
+            Platform.runLater(() -> {
+                apiStatusLabel.setText(reachable ? "Remote API: connected" : "Remote API: unreachable");
+                apiStatusLabel.getStyleClass().removeAll("api-status-live", "api-status-warning", "api-status-error");
+                apiStatusLabel.getStyleClass().add(reachable ? "api-status-live" : "api-status-error");
+            });
+        }, "ApiStatusChecker").start();
     }
 
     // ==========================================
@@ -355,12 +426,13 @@ public class App extends Application {
             return;
         }
 
-        HBox mainLayout = new HBox();
+        BorderPane mainLayout = new BorderPane();
         VBox sidebar = createSidebar("dash");
 
         VBox content = new VBox(20);
         content.setPadding(new Insets(25));
-        HBox.setHgrow(content, Priority.ALWAYS);
+        content.setMaxWidth(Double.MAX_VALUE);
+        BorderPane.setAlignment(content, Pos.TOP_CENTER);
 
         // Header
         HBox header = new HBox();
@@ -377,7 +449,7 @@ public class App extends Application {
         VBox banner = createSimulationBanner();
 
         // Cards Row (Savings / Checking summaries)
-        HBox cardsRow = new HBox(20);
+        FlowPane cardsRow = createResponsiveFlowPane(20, 20);
         cardsRow.setPrefHeight(150);
 
         List<Account> accounts = accountService.getAccountsByUserId(currentUser.getId());
@@ -392,7 +464,7 @@ public class App extends Application {
         cardsRow.getChildren().addAll(savingsCard, checkingCard);
 
         // Operations Section & Quick Charts
-        HBox opsAndCharts = new HBox(20);
+        FlowPane opsAndCharts = createResponsiveFlowPane(20, 20);
         VBox.setVgrow(opsAndCharts, Priority.ALWAYS);
 
         // Quick Deposit/Withdraw
@@ -466,11 +538,14 @@ public class App extends Application {
 
         opsAndCharts.getChildren().addAll(quickOpsCard, chartCard);
 
-        content.getChildren().addAll(header, banner, cardsRow, opsAndCharts);
-        mainLayout.getChildren().addAll(sidebar, content);
+        HBox apiStatus = createApiStatusBanner();
+        content.getChildren().addAll(header, apiStatus, banner, cardsRow, opsAndCharts);
+        mainLayout.setLeft(sidebar);
+        mainLayout.setCenter(content);
 
         Scene scene = new Scene(mainLayout, 1000, 680);
         applyStyle(scene);
+        applyResponsiveSidebar(scene, mainLayout, sidebar);
         primaryStage.setScene(scene);
 
         // Deposit Action
@@ -491,6 +566,8 @@ public class App extends Application {
 
             boolean ok = accountService.deposit(accNum, amount, currentUser.getId());
             if (ok) {
+                apiService.notifyRemoteEvent("DEPOSIT",
+                        "Deposited $" + amount + " to account " + accNum + " by " + currentUser.getUsername());
                 AlertHelper.showNotification(primaryStage, "Deposit Confirmed",
                         "Successfully deposited $" + amount + " to account " + accNum, AlertHelper.AlertType.SUCCESS);
                 showDashboard();
@@ -518,6 +595,8 @@ public class App extends Application {
 
             boolean ok = accountService.withdraw(accNum, amount, currentUser.getId());
             if (ok) {
+                apiService.notifyRemoteEvent("WITHDRAWAL",
+                        "Withdrew $" + amount + " from account " + accNum + " by " + currentUser.getUsername());
                 AlertHelper.showNotification(primaryStage, "Withdrawal Confirmed",
                         "Successfully withdrew $" + amount + " from account " + accNum, AlertHelper.AlertType.SUCCESS);
                 showDashboard();
@@ -576,12 +655,13 @@ public class App extends Application {
             return;
         }
 
-        HBox mainLayout = new HBox();
+        BorderPane mainLayout = new BorderPane();
         VBox sidebar = createSidebar("transfer");
 
         VBox content = new VBox(20);
         content.setPadding(new Insets(25));
-        HBox.setHgrow(content, Priority.ALWAYS);
+        content.setMaxWidth(Double.MAX_VALUE);
+        BorderPane.setAlignment(content, Pos.TOP_CENTER);
 
         // Header
         Label headerTitle = new Label("Secure Fund Transfer");
@@ -639,11 +719,14 @@ public class App extends Application {
                 descLabel, descField,
                 submitBtn);
 
-        content.getChildren().addAll(headerTitle, subtitle, banner, form);
-        mainLayout.getChildren().addAll(sidebar, content);
+        HBox apiStatus = createApiStatusBanner();
+        content.getChildren().addAll(headerTitle, subtitle, apiStatus, banner, form);
+        mainLayout.setLeft(sidebar);
+        mainLayout.setCenter(content);
 
         Scene scene = new Scene(mainLayout, 1000, 680);
         applyStyle(scene);
+        applyResponsiveSidebar(scene, mainLayout, sidebar);
         primaryStage.setScene(scene);
 
         // Actions
@@ -703,11 +786,12 @@ public class App extends Application {
             updateOtpBanner(otpCode);
 
             // Open OTP Verification Dialog Modal
-            showOtpVerificationDialog(currentUser.getId(), fromAcc, toAcc, amount, desc);
+            showOtpVerificationDialog(currentUser, currentUser.getId(), fromAcc, toAcc, amount, desc);
         });
     }
 
-    private void showOtpVerificationDialog(int userId, String fromAcc, String toAcc, BigDecimal amount, String desc) {
+    private void showOtpVerificationDialog(User currentUser, int userId, String fromAcc, String toAcc,
+            BigDecimal amount, String desc) {
         Stage modal = new Stage();
         modal.initModality(Modality.APPLICATION_MODAL);
         modal.initOwner(primaryStage);
@@ -746,6 +830,8 @@ public class App extends Application {
                 modal.close();
                 boolean success = transactionService.transfer(fromAcc, toAcc, amount, desc, userId);
                 if (success) {
+                    apiService.notifyRemoteEvent("TRANSFER", "Transferred $" + amount + " from " + fromAcc + " to "
+                            + toAcc + " by " + currentUser.getUsername());
                     AlertHelper
                             .showNotification(primaryStage, "Transfer Complete",
                                     "Successfully transferred $" + amount + " to " + toAcc
@@ -776,12 +862,13 @@ public class App extends Application {
             return;
         }
 
-        HBox mainLayout = new HBox();
+        BorderPane mainLayout = new BorderPane();
         VBox sidebar = createSidebar("history");
 
         VBox content = new VBox(20);
         content.setPadding(new Insets(25));
-        HBox.setHgrow(content, Priority.ALWAYS);
+        content.setMaxWidth(Double.MAX_VALUE);
+        BorderPane.setAlignment(content, Pos.TOP_CENTER);
 
         // Header
         Label titleLabel = new Label("Account Statements & History");
@@ -790,7 +877,7 @@ public class App extends Application {
         subtitle.getStyleClass().add("subheading");
 
         // Filter Controls Card
-        HBox filtersCard = new HBox(15);
+        FlowPane filtersCard = createResponsiveFlowPane(15, 15);
         filtersCard.getStyleClass().add("glass-pane");
         filtersCard.setPadding(new Insets(15));
         filtersCard.setAlignment(Pos.CENTER_LEFT);
@@ -941,11 +1028,14 @@ public class App extends Application {
         // Trigger load
         loadData.run();
 
-        content.getChildren().addAll(titleLabel, subtitle, filtersCard, table);
-        mainLayout.getChildren().addAll(sidebar, content);
+        HBox apiStatus = createApiStatusBanner();
+        content.getChildren().addAll(titleLabel, subtitle, apiStatus, filtersCard, table);
+        mainLayout.setLeft(sidebar);
+        mainLayout.setCenter(content);
 
         Scene scene = new Scene(mainLayout, 1000, 680);
         applyStyle(scene);
+        applyResponsiveSidebar(scene, mainLayout, sidebar);
         primaryStage.setScene(scene);
     }
 
@@ -959,12 +1049,13 @@ public class App extends Application {
             return;
         }
 
-        HBox mainLayout = new HBox();
+        BorderPane mainLayout = new BorderPane();
         VBox sidebar = createSidebar("admin");
 
         VBox content = new VBox(20);
         content.setPadding(new Insets(25));
-        HBox.setHgrow(content, Priority.ALWAYS);
+        content.setMaxWidth(Double.MAX_VALUE);
+        BorderPane.setAlignment(content, Pos.TOP_CENTER);
 
         // Header
         Label titleLabel = new Label("Security Audits & Account Moderation");
@@ -1097,11 +1188,14 @@ public class App extends Application {
         // Trigger load
         loadData.run();
 
-        content.getChildren().addAll(titleLabel, subtitle, tabs);
-        mainLayout.getChildren().addAll(sidebar, content);
+        HBox apiStatus = createApiStatusBanner();
+        content.getChildren().addAll(titleLabel, subtitle, apiStatus, tabs);
+        mainLayout.setLeft(sidebar);
+        mainLayout.setCenter(content);
 
         Scene scene = new Scene(mainLayout, 1000, 680);
         applyStyle(scene);
+        applyResponsiveSidebar(scene, mainLayout, sidebar);
         primaryStage.setScene(scene);
     }
 }
